@@ -22,6 +22,8 @@ data:
   ALLOWED_EMAIL_DOMAINS: {{ .Values.backend.config.allowedEmailDomains | quote }}
   DISABLE_WORKSPACE_CREATION: {{ .Values.backend.config.disableWorkspaceCreation | quote }}
   DO_NOT_TRACK: {{ .Values.backend.config.doNotTrack | quote }}
+  MULTICA_BOARD_HIDE_CANCELLED_HOURS: {{ .Values.backend.config.boardHideCancelledHours | quote }}
+  MULTICA_BOARD_HIDE_DONE_HOURS: {{ .Values.backend.config.boardHideDoneHours | quote }}
   MULTICA_VCS_INTEGRATION_ENABLED: {{ .Values.backend.config.vcsIntegrationEnabled | quote }}
   MULTICA_CLOUD_URL: {{ .Values.backend.config.cloud.url | quote }}
   GOOGLE_CLIENT_ID: {{ .Values.backend.config.googleClientId | quote }}

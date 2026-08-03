@@ -89,6 +89,24 @@ Changes take effect after restarting the backend / compose stack. The web UI rea
 
 > Note: setting `ALLOW_SIGNUP=false` enables invite-only account creation. A new user with a live pending workspace invitation can create an account with the invited email; users without an allowlist match or a valid invitation remain blocked. Invitations also permit emails outside configured allowlists when `ALLOW_SIGNUP=true`. Revocation does not delete accounts already created using an invitation or prevent those accounts from signing in. Combine this with `DISABLE_WORKSPACE_CREATION=true` when invitees must join an existing workspace instead of creating their own.
 
+### Aging Out Closed Issues (Optional)
+
+| Variable | Description |
+|----------|-------------|
+| `MULTICA_BOARD_HIDE_CANCELLED_HOURS` | Hide `cancelled` issues from the issue surface once they have been cancelled for this many hours |
+| `MULTICA_BOARD_HIDE_DONE_HOURS` | Hide `done` issues from the issue surface once they have been done for this many hours |
+
+Both are unset by default, which keeps every closed issue visible. Each is independent: set one, the other, or neither. Unset, empty, non-numeric, or non-positive values disable that cutoff.
+
+On a long-running instance the `done` and `cancelled` columns grow without bound, which is mostly noise for a team that only cares about recent history. These cutoffs drop aged-out closed issues from the list, board, and their column counts.
+
+Hiding is presentation-only, and it deliberately does not apply everywhere:
+
+- The clock starts when the issue **entered** its current terminal status, not when it was last touched, so a later comment or edit does not resurrect it.
+- **Searches are exempt.** A hidden issue is still findable by name, still reachable by direct link, and still returned by `GET /api/issues`, the CLI, and quick search. Nothing is deleted or archived.
+
+Changes take effect after restarting the backend / compose stack.
+
 ### File Storage (Optional)
 
 Uploads and attachments are written to local disk by default. Set `S3_BUCKET` to

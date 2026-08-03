@@ -115,6 +115,8 @@ services:
       # Managed Cloud stays off for self-hosting. All managed Cloud clients use
       # this single URL when it is configured.
       MULTICA_CLOUD_URL: ${MULTICA_CLOUD_URL:-}
+      MULTICA_BOARD_HIDE_CANCELLED_HOURS: ${MULTICA_BOARD_HIDE_CANCELLED_HOURS:-}
+      MULTICA_BOARD_HIDE_DONE_HOURS: ${MULTICA_BOARD_HIDE_DONE_HOURS:-}
       GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
       # App API credentials. The pull_request webhook is what mirrors a PR
