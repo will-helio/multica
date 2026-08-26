@@ -440,7 +440,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		uploaderType, uploaderID := h.resolveActor(r, userID, workspaceID)
+		uploaderType, uploaderID, _ := h.resolveActor(r, userID, workspaceID)
 
 		params := db.CreateAttachmentParams{
 			ID:           pgtype.UUID{Bytes: id, Valid: true},

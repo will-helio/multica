@@ -3071,7 +3071,7 @@ func TestResolveActor(t *testing.T) {
 				req.Header.Set("X-Task-ID", tt.taskIDHeader)
 			}
 
-			actorType, actorID := testHandler.resolveActor(req, testUserID, testWorkspaceID)
+			actorType, actorID, _ := testHandler.resolveActor(req, testUserID, testWorkspaceID)
 
 			if actorType != tt.wantActorType {
 				t.Errorf("actorType = %q, want %q", actorType, tt.wantActorType)
@@ -3638,7 +3638,7 @@ func TestRootMentionOwnerRoutesMemberReplyButNotAgentReply(t *testing.T) {
 	w = postComment(issueID, map[string]any{
 		"content":   "No reply needed — just an acknowledgment.",
 		"parent_id": parentComment.ID,
-	}, map[string]string{"X-Agent-ID": agentA, "X-Task-ID": agentATask})
+	}, map[string]string{"X-Agent-ID": agentA, "X-Task-ID": agentATask, "X-Actor-Source": "task_token"})
 	if w.Code != http.StatusCreated {
 		t.Fatalf("agent A reply: expected 201, got %d: %s", w.Code, w.Body.String())
 	}

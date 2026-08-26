@@ -312,8 +312,10 @@ func (h *Handler) filterAccessibleAgentFacetValues(
 	if !ok {
 		return nil, false
 	}
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	userID := requestUserID(r)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeIssueTableQueryFailure(w, r, "failed to resolve agent access")
 		return nil, false

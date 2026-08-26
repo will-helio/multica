@@ -597,47 +597,60 @@ func requestUserID(r *http.Request) string {
 // review). The daemon always pairs the two headers, so requiring both has
 // no effect on legitimate agent callers but closes the impersonation path.
 //
-// Returns ("agent", agentID) on success, ("member", userID) otherwise.
-func (h *Handler) resolveActor(r *http.Request, userID, workspaceID string) (actorType, actorID string) {
+// Returns ("agent", agentID, true) only for the unforgeable task_token
+// signal. The legacy X-Agent-ID/X-Task-ID fallback returns ("agent",
+// agentID, false) on success — verified=false — because it only checks
+// internal consistency (the named agent exists, the named task belongs to
+// it), never that the CALLER actually is that agent/process; that pair is
+// not stripped on the mul_ PAT / JWT path (the CLI/web app legitimately use
+// it for comment/issue attribution), so any workspace member holding a
+// normal token can forge it for an agent+task they do not control.
+//
+// verified distinguishes the two: CAPABILITY decisions (view/list/invoke/
+// squad-evaluation/edit-authorization — see capabilityActor in
+// agent_access.go) must require verified; ATTRIBUTION uses (comment/issue
+// authorship, reactions, uploads) may keep using the unverified form so the
+// CLI and web app do not break.
+func (h *Handler) resolveActor(r *http.Request, userID, workspaceID string) (actorType, actorID string, verified bool) {
 	if r.Header.Get("X-Actor-Source") == "task_token" {
 		// Server-set header — auth middleware also forced X-Agent-ID
 		// from the token row. Trust it directly without re-querying.
-		return "agent", r.Header.Get("X-Agent-ID")
+		return "agent", r.Header.Get("X-Agent-ID"), true
 	}
 	agentID := r.Header.Get("X-Agent-ID")
 	if agentID == "" {
-		return "member", userID
+		return "member", userID, false
 	}
 	taskID := r.Header.Get("X-Task-ID")
 	if taskID == "" {
 		slog.Debug("resolveActor: X-Agent-ID present but X-Task-ID missing, refusing to trust agent identity", "agent_id", agentID)
-		return "member", userID
+		return "member", userID, false
 	}
 
 	agentUUID, err := util.ParseUUID(agentID)
 	if err != nil {
 		slog.Debug("resolveActor: X-Agent-ID is not a valid UUID, falling back to member", "agent_id", agentID)
-		return "member", userID
+		return "member", userID, false
 	}
 	// Validate the agent exists in the target workspace.
 	agent, err := h.Queries.GetAgent(r.Context(), agentUUID)
 	if err != nil || uuidToString(agent.WorkspaceID) != workspaceID {
 		slog.Debug("resolveActor: X-Agent-ID rejected, agent not found or workspace mismatch", "agent_id", agentID, "workspace_id", workspaceID)
-		return "member", userID
+		return "member", userID, false
 	}
 
 	taskUUID, err := util.ParseUUID(taskID)
 	if err != nil {
 		slog.Debug("resolveActor: X-Task-ID is not a valid UUID, falling back to member", "task_id", taskID)
-		return "member", userID
+		return "member", userID, false
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
 	if err != nil || uuidToString(task.AgentID) != agentID {
 		slog.Debug("resolveActor: X-Task-ID rejected, task not found or agent mismatch", "agent_id", agentID, "task_id", taskID)
-		return "member", userID
+		return "member", userID, false
 	}
 
-	return "agent", agentID
+	return "agent", agentID, false
 }
 
 func requireUserID(w http.ResponseWriter, r *http.Request) (string, bool) {

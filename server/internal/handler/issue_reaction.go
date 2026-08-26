@@ -56,7 +56,7 @@ func (h *Handler) AddIssueReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := uuidToString(issue.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 
 	reaction, err := h.Queries.AddIssueReaction(r.Context(), db.AddIssueReactionParams{
 		IssueID:     issue.ID,
@@ -108,7 +108,7 @@ func (h *Handler) RemoveIssueReaction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := uuidToString(issue.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 
 	if err := h.Queries.RemoveIssueReaction(r.Context(), db.RemoveIssueReactionParams{
 		IssueID:   issue.ID,

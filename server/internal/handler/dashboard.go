@@ -120,8 +120,10 @@ func (h *Handler) dashboardRestrictedAgents(
 	r *http.Request,
 	workspaceID, role string,
 ) (map[string]struct{}, bool) {
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	restricted, ok := h.restrictedAgentIDs(r.Context(), workspaceID, actorType, actorID, role)
+	userID := requestUserID(r)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	restricted, ok := h.restrictedAgentIDs(r.Context(), workspaceID, capActorType, capActorID, role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return nil, false

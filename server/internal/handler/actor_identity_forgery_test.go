@@ -249,3 +249,197 @@ func TestCreateChatSession_ForgedLegacyHeaders_BorrowsOriginatorToInvoke(t *test
 			targetAgentID, before, after)
 	}
 }
+
+// === PHASE 2 REGRESSION COVERAGE =========================================
+//
+// The tests below cover the systemic fix: resolveActor now returns a third
+// value, `verified`, that is true only for the unforgeable X-Actor-Source:
+// task_token signal. capabilityActor (agent_access.go) downgrades any
+// unverified "agent" claim to the real member for every CAPABILITY decision
+// (view/list/invoke/squad-evaluation/edit-authorization), while ATTRIBUTION
+// uses (comment/issue authorship, reactions, uploads) keep trusting the
+// unverified legacy form exactly as before. Each cluster below gets a DENY
+// test (forged/unverified must fail) and, where meaningful, an ALLOW test
+// (a genuine task_token agent must still be able to do the legitimate A2A
+// thing) so the fix cannot be mistaken for simply deleting the agent branch.
+
+// TestListAgents_ForgedLegacyHeaders_DoesNotBypassPrivateAgentFilter is the
+// cluster-2 DENY regression: ListAgents (agent.go) skips the per-member
+// memberAllowedToViewAgent filter whenever actorType=="agent". Before the
+// fix, forged legacy headers put a plain member on that bypass path and
+// leaked every private agent in the workspace into the list response.
+func TestListAgents_ForgedLegacyHeaders_DoesNotBypassPrivateAgentFilter(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	_, attackerID, targetAgentID, decoyAgentID, decoyTaskID := forgeryTestActors(t)
+
+	w := httptest.NewRecorder()
+	req := forgeRequestAs(attackerID, "GET", "/api/agents", nil, decoyAgentID, decoyTaskID)
+	testHandler.ListAgents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if listContainsAgent(t, w.Body.Bytes(), targetAgentID) {
+		t.Errorf("VULNERABLE (cluster 2, agent.go ListAgents / accessibleAgentIDs pattern): "+
+			"plain member forged X-Agent-ID=%s X-Task-ID=%s and the private agent %s "+
+			"they have no access to leaked into ListAgents", decoyAgentID, decoyTaskID, targetAgentID)
+	}
+}
+
+// TestListAgents_VerifiedAgent_StillSeesPrivateAgents is the cluster-2 ALLOW
+// regression: a genuine task_token-verified agent identity must still
+// bypass the per-member filter (A2A collaboration + inspection, preserved
+// by design -- see canAccessPrivateAgent's doc comment).
+func TestListAgents_VerifiedAgent_StillSeesPrivateAgents(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	_, attackerID, targetAgentID, decoyAgentID, _ := forgeryTestActors(t)
+
+	w := httptest.NewRecorder()
+	req := newRequestAs(attackerID, "GET", "/api/agents", nil)
+	req.Header.Set("X-Agent-ID", decoyAgentID)
+	req.Header.Set("X-Actor-Source", "task_token") // genuine mat_ token request
+	testHandler.ListAgents(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListAgents: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !listContainsAgent(t, w.Body.Bytes(), targetAgentID) {
+		t.Errorf("REGRESSION (cluster 2 A2A preserved): a verified agent (task_token) "+
+			"no longer sees private agent %s -- legitimate agent-to-agent visibility broke", targetAgentID)
+	}
+}
+
+// TestGetAgent_VerifiedAgent_A2AAccessPreserved is the cluster-1 ALLOW
+// regression, complementing TestGetAgent_ForgedLegacyHeaders_Bypass...: a
+// genuine task_token-verified agent identity must still be able to read
+// another private agent's detail (A2A collaboration + inspection).
+func TestGetAgent_VerifiedAgent_A2AAccessPreserved(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	_, attackerID, targetAgentID, decoyAgentID, _ := forgeryTestActors(t)
+
+	w := httptest.NewRecorder()
+	req := newRequestAs(attackerID, "GET", "/api/agents/"+targetAgentID, nil)
+	req.Header.Set("X-Agent-ID", decoyAgentID)
+	req.Header.Set("X-Actor-Source", "task_token") // genuine mat_ token request
+	testHandler.GetAgent(w, withURLParam(req, "id", targetAgentID))
+	if w.Code != http.StatusOK {
+		t.Errorf("REGRESSION (cluster 1 A2A preserved): a verified agent (task_token) "+
+			"can no longer GetAgent a private agent %s -- expected 200, got %d: %s",
+			targetAgentID, w.Code, w.Body.String())
+	}
+}
+
+// TestRecordSquadLeaderEvaluation_ForgedLegacyHeaders_Denied is the
+// cluster-5 DENY regression: RecordSquadLeaderEvaluation (squad.go) checked
+// only actorType=="agent" && actorID==squad.LeaderID, with NO verified
+// check at all -- any member who forged the leader's X-Agent-ID plus one of
+// its real task ids could record an evaluation as the squad leader.
+func TestRecordSquadLeaderEvaluation_ForgedLegacyHeaders_Denied(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+
+	fx := newRunningSquadLeaderTaskFixture(t)
+
+	// Forge the real squad leader's identity via the legacy header pair,
+	// WITHOUT X-Actor-Source: task_token -- exactly the forgeable path.
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues/"+fx.IssueID+"/squad-evaluated", map[string]any{
+		"outcome": "no_action",
+		"reason":  "forged evaluation",
+	})
+	req = withURLParam(req, "id", fx.IssueID)
+	req.Header.Set("X-Agent-ID", fx.LeaderID)
+	req.Header.Set("X-Task-ID", fx.TaskID)
+	// Deliberately no X-Actor-Source header.
+	testHandler.RecordSquadLeaderEvaluation(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("VULNERABLE (cluster 5, squad.go RecordSquadLeaderEvaluation): "+
+			"forged X-Agent-ID=%s X-Task-ID=%s (no task_token) recorded a squad leader "+
+			"evaluation -- expected 403, got %d: %s", fx.LeaderID, fx.TaskID, w.Code, w.Body.String())
+	}
+}
+
+// TestCreateComment_ForgedLegacyHeaders_AttributionKeptButInvokeDenied is
+// the cluster-4 regression, and the one that proves the ATTRIBUTION /
+// CAPABILITY split actually works as designed rather than just breaking the
+// legacy header path outright:
+//
+//   - ATTRIBUTION must keep working unverified: the resulting comment is
+//     still authored as the forged agent (AuthorType/AuthorID), exactly as
+//     before, so the CLI/web app do not regress.
+//   - CAPABILITY must now require verified: the comment's @-mention of a
+//     private agent -- whose owner happens to be the borrowed task's
+//     originator, i.e. the exact confused-deputy shape from cluster 3 --
+//     must NOT enqueue a run, because the acting identity is unverified.
+func TestCreateComment_ForgedLegacyHeaders_AttributionKeptButInvokeDenied(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	ownerID, attackerID, targetAgentID, decoyAgentID, decoyTaskID := forgeryTestActors(t)
+	_ = ownerID
+
+	// An issue to comment on, created by the workspace owner.
+	w := httptest.NewRecorder()
+	testHandler.CreateIssue(w, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":  "forgery attribution/capability split test",
+		"status": "todo",
+	}))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var issue IssueResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &issue); err != nil {
+		t.Fatalf("decode issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issue.ID) })
+
+	countQueuedTasksForTarget := func() int {
+		var n int
+		if err := testPool.QueryRow(ctx,
+			`SELECT count(*) FROM agent_task_queue WHERE issue_id = $1 AND agent_id = $2 AND status = 'queued'`,
+			issue.ID, targetAgentID).Scan(&n); err != nil {
+			t.Fatalf("count queued tasks: %v", err)
+		}
+		return n
+	}
+
+	mention := fmt.Sprintf("[@Target](mention://agent/%s) please handle this", targetAgentID)
+	w = httptest.NewRecorder()
+	req := forgeRequestAs(attackerID, "POST", "/api/issues/"+issue.ID+"/comments", map[string]any{
+		"content": mention,
+	}, decoyAgentID, decoyTaskID)
+	req = withURLParam(req, "id", issue.ID)
+	testHandler.CreateComment(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("REGRESSION (attribution must keep working): CreateComment with unverified "+
+			"legacy X-Agent-ID/X-Task-ID: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var comment CommentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &comment); err != nil {
+		t.Fatalf("decode comment: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(context.Background(), `DELETE FROM comment WHERE id = $1`, comment.ID) })
+
+	if comment.AuthorType != "agent" || comment.AuthorID != decoyAgentID {
+		t.Errorf("REGRESSION (attribution must keep working): comment author = (%s, %s), want (agent, %s)",
+			comment.AuthorType, comment.AuthorID, decoyAgentID)
+	}
+
+	if n := countQueuedTasksForTarget(); n != 0 {
+		t.Errorf("VULNERABLE (cluster 4/3 boundary, comment.go CreateComment trigger path): "+
+			"unverified forged X-Agent-ID=%s X-Task-ID=%s mentioned private agent %s (borrowed "+
+			"originator = its owner) and enqueued %d run(s) -- expected 0", decoyAgentID, decoyTaskID, targetAgentID, n)
+	}
+}

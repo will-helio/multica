@@ -438,6 +438,7 @@ func TestCreateComment_DualRoleAgentWorkerCommentWakesLeader(t *testing.T) {
 	})
 	r.Header.Set("X-Agent-ID", fx.LeaderID)
 	r.Header.Set("X-Task-ID", workerTaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	r = withURLParam(r, "id", issueID)
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusCreated {
@@ -500,6 +501,7 @@ func TestCreateComment_SquadLeaderMentionTaskDoesNotSelfTriggerAssignedFallback(
 		r := newRequest("POST", "/api/issues/"+issueID+"/comments", body)
 		r.Header.Set("X-Agent-ID", fx.LeaderID)
 		r.Header.Set("X-Task-ID", taskID)
+		r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 		r = withURLParam(r, "id", issueID)
 		testHandler.CreateComment(w, r)
 		if w.Code != http.StatusCreated {
@@ -583,6 +585,7 @@ func TestCreateComment_SquadLeaderThreadParentTaskDoesNotSelfTriggerAssignedFall
 		r := newRequest("POST", "/api/issues/"+issueID+"/comments", body)
 		r.Header.Set("X-Agent-ID", fx.LeaderID)
 		r.Header.Set("X-Task-ID", taskID)
+		r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 		r = withURLParam(r, "id", issueID)
 		testHandler.CreateComment(w, r)
 		if w.Code != http.StatusCreated {

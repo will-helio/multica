@@ -452,7 +452,7 @@ func (h *Handler) requirePropertyAdmin(w http.ResponseWriter, r *http.Request) (
 	if !ok {
 		return "", "", false
 	}
-	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+	if actorType, _, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
 		writeError(w, http.StatusForbidden, "agents cannot manage property definitions")
 		return "", "", false
 	}
@@ -788,7 +788,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := uuidToString(updated.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 	properties := parseIssueProperties(updated.Properties)
 	h.publish(protocol.EventIssuePropertiesChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":   uuidToString(updated.ID),
@@ -838,7 +838,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := uuidToString(updated.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 	properties := parseIssueProperties(updated.Properties)
 	h.publish(protocol.EventIssuePropertiesChanged, workspaceID, actorType, actorID, map[string]any{
 		"issue_id":   uuidToString(updated.ID),

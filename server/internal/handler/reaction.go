@@ -70,7 +70,7 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 
 	reaction, err := h.Queries.AddReaction(r.Context(), db.AddReactionParams{
 		CommentID:   comment.ID,
@@ -145,7 +145,7 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 
 	if err := h.Queries.RemoveReaction(r.Context(), db.RemoveReactionParams{
 		CommentID: comment.ID,

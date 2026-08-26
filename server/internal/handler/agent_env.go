@@ -94,24 +94,25 @@ func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (age
 	// request carries the server-stamped X-Actor-Source: task_token,
 	// which resolveActor trusts directly) — so this identity is precise
 	// and cannot be forged or widened by a client-supplied header.
-	resolvedType, resolvedID := h.resolveActor(r, userID, workspaceID)
+	resolvedType, resolvedID, verified := h.resolveActor(r, userID, workspaceID)
 	if resolvedType == "agent" {
 		// Self-access is granted ONLY for the unforgeable task_token
-		// signal. resolveActor's other "agent" path — the legacy
-		// X-Agent-ID/X-Task-ID header pair — only checks internal
-		// consistency (the agent exists, the task belongs to it); it
-		// never confirms the CALLER is that agent. The auth middleware
-		// strips a client-supplied X-Actor-Source but does NOT strip
-		// X-Agent-ID/X-Task-ID on the mul_ PAT / JWT path (those headers
-		// are legitimately used there for CLI/web attribution — see
-		// cli.APIClient.AgentID/TaskID and corsAllowedHeaders), so a
-		// plain workspace member could otherwise send a normal PAT plus
-		// a forged X-Agent-ID/X-Task-ID pair for any task they can see
-		// and pass through here as that agent. Requiring task_token
-		// specifically closes that; it mirrors the same gate
-		// chatHistorySession and RequireHumanActor already apply for
-		// the identical reason.
-		if r.Header.Get("X-Actor-Source") != "task_token" {
+		// signal (verified==true). resolveActor's other "agent" path —
+		// the legacy X-Agent-ID/X-Task-ID header pair — only checks
+		// internal consistency (the agent exists, the task belongs to
+		// it); it never confirms the CALLER is that agent. The auth
+		// middleware strips a client-supplied X-Actor-Source but does
+		// NOT strip X-Agent-ID/X-Task-ID on the mul_ PAT / JWT path
+		// (those headers are legitimately used there for CLI/web
+		// attribution — see cli.APIClient.AgentID/TaskID and
+		// corsAllowedHeaders), so a plain workspace member could
+		// otherwise send a normal PAT plus a forged X-Agent-ID/X-Task-ID
+		// pair for any task they can see and pass through here as that
+		// agent. Requiring verified specifically closes that; it mirrors
+		// the same gate chatHistorySession and RequireHumanActor already
+		// apply for the identical reason (capabilityActor in
+		// agent_access.go is the shared name for this pattern elsewhere).
+		if !verified {
 			writeError(w, http.StatusForbidden, "agents may not access env management endpoints")
 			return db.Agent{}, "", "", false
 		}

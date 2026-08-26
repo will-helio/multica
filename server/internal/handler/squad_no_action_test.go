@@ -80,6 +80,7 @@ func recordSquadLeaderEvaluationForTaskWithHeader(t *testing.T, fx runningSquadL
 	r = withURLParam(r, "id", fx.IssueID)
 	r.Header.Set("X-Agent-ID", fx.LeaderID)
 	r.Header.Set("X-Task-ID", taskIDHeader)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 
 	testHandler.RecordSquadLeaderEvaluation(w, r)
 	if w.Code != http.StatusCreated {
@@ -177,6 +178,7 @@ func TestCreateComment_SquadLeaderNoActionRejectsComment(t *testing.T) {
 	r = withURLParam(r, "id", fx.IssueID)
 	r.Header.Set("X-Agent-ID", fx.LeaderID)
 	r.Header.Set("X-Task-ID", fx.TaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusConflict {

@@ -395,7 +395,7 @@ func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create skill: "+err.Error())
 		return
 	}
-	actorType, actorID := h.resolveActor(r, creatorID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, creatorID, workspaceID)
 	h.publish(protocol.EventSkillCreated, workspaceID, actorType, actorID, map[string]any{"skill": resp})
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -527,7 +527,7 @@ func (h *Handler) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		Files:         fileResps,
 	}
 	wsID := h.resolveWorkspaceID(r)
-	actorType, actorID := h.resolveActor(r, requestUserID(r), wsID)
+	actorType, actorID, _ := h.resolveActor(r, requestUserID(r), wsID)
 	h.publish(protocol.EventSkillUpdated, wsID, actorType, actorID, map[string]any{"skill": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -564,7 +564,7 @@ func (h *Handler) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to commit skill deletion")
 		return
 	}
-	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(skill.WorkspaceID))
+	actorType, actorID, _ := h.resolveActor(r, requestUserID(r), uuidToString(skill.WorkspaceID))
 	h.publish(protocol.EventSkillDeleted, uuidToString(skill.WorkspaceID), actorType, actorID, map[string]any{"skill_id": uuidToString(skill.ID)})
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -2127,7 +2127,7 @@ func (h *Handler) resolveImportSkillConflict(w http.ResponseWriter, r *http.Requ
 			})
 			return
 		}
-		actorType, actorID := h.resolveActor(r, creatorID, workspaceID)
+		actorType, actorID, _ := h.resolveActor(r, creatorID, workspaceID)
 		h.publish(protocol.EventSkillUpdated, workspaceID, actorType, actorID, map[string]any{"skill": resp})
 		writeJSON(w, http.StatusOK, SkillImportResult{Status: "updated", Skill: &resp})
 	case importOnConflictRename:
@@ -2140,7 +2140,7 @@ func (h *Handler) resolveImportSkillConflict(w http.ResponseWriter, r *http.Requ
 			})
 			return
 		}
-		actorType, actorID := h.resolveActor(r, creatorID, workspaceID)
+		actorType, actorID, _ := h.resolveActor(r, creatorID, workspaceID)
 		h.publish(protocol.EventSkillCreated, workspaceID, actorType, actorID, map[string]any{"skill": resp})
 		writeJSON(w, http.StatusCreated, SkillImportResult{
 			Status:        "created",
@@ -2309,7 +2309,7 @@ func (h *Handler) finishSkillImport(w http.ResponseWriter, r *http.Request, work
 		writeError(w, http.StatusInternalServerError, "failed to create skill: "+err.Error())
 		return
 	}
-	actorType, actorID := h.resolveActor(r, creatorID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, creatorID, workspaceID)
 	h.publish(protocol.EventSkillCreated, workspaceID, actorType, actorID, map[string]any{"skill": resp})
 	if structuredResult {
 		writeJSON(w, http.StatusCreated, SkillImportResult{Status: "created", Skill: &resp})
@@ -2632,7 +2632,7 @@ func (h *Handler) writeUpdatedAgentSkills(w http.ResponseWriter, r *http.Request
 		)
 		resp[i].Enabled = &s.Enabled
 	}
-	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
+	actorType, actorID, _ := h.resolveActor(r, requestUserID(r), uuidToString(agent.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(agent.WorkspaceID), actorType, actorID, map[string]any{"agent_id": uuidToString(agent.ID), "skills": resp})
 	writeJSON(w, http.StatusOK, resp)
 }

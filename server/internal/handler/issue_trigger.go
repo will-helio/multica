@@ -154,7 +154,10 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 		hasNewAssignee = true
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	rawActorType, rawActorID, verified := h.resolveActor(r, userID, workspaceID)
+	// CAPABILITY: preview must mirror the real trigger gate — see
+	// issueTriggerPreviewProbe / canInvokeAgent below.
+	actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, userID)
 	resp := IssueTriggerPreviewResponse{Triggers: make([]IssueTriggerPreviewItem, 0)}
 
 	appendTrigger := func(issue db.Issue, in service.IssueTriggerInput) {

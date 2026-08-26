@@ -1660,7 +1660,11 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	rawActorType, rawActorID, verified := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	// CAPABILITY: this preview must mirror the real trigger gate exactly, so
+	// it needs a verified agent identity, not merely an attributed one
+	// (actor-identity forgery class).
+	actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, userID)
 	opts.OriginatorUserID = h.invokeOriginatorFromRequest(r, actorType, actorID)
 	opts.AutopilotDelegationAuthorityUserID = h.autopilotDelegationAuthorityFromRequest(r, issue, actorType, actorID)
 	triggers, targets := h.computeCommentAgentTriggers(r.Context(), issue, content, parentComment, actorType, actorID, opts)
@@ -1773,7 +1777,13 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Determine author identity: agent (via X-Agent-ID header) or member.
-	authorType, authorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	// authorType/authorID are ATTRIBUTION only from here down (comment.AuthorType/
+	// AuthorID storage, escalation-cancel side effect) — kept on the unverified
+	// legacy form exactly as before so the CLI/daemon keep working. capAuthorType/
+	// capAuthorID (derived below, right before the @-mention CAPABILITY gate) are
+	// the verified-required form; do not use authorType/authorID for anything that
+	// grants capability past this point.
+	authorType, authorID, verified := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 
 	// Defense against resumed-session drift: when an agent posts from inside a
 	// comment-triggered task AND the comment is being posted on that same
@@ -1903,16 +1913,22 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		h.TaskService.CancelDeferredEscalationsForIssueAgent(r.Context(), issue.ID, comment.AuthorID)
 	}
 
-	originatorUserID := h.invokeOriginatorFromRequest(r, authorType, authorID)
+	// CAPABILITY: @-mention triggering from this comment must gate on a
+	// verified agent identity, not merely an attributed one — otherwise a
+	// forged X-Agent-ID/X-Task-ID pair lets any member borrow an arbitrary
+	// task's originator to invoke an agent they may not (actor-identity
+	// forgery class).
+	capAuthorType, capAuthorID := capabilityActor(authorType, authorID, verified, userID)
+	originatorUserID := h.invokeOriginatorFromRequest(r, capAuthorType, capAuthorID)
 	// MUL-4857: resolve the autopilot delegation authority from the SAME
 	// server-trusted X-Task-ID header the originator resolution uses, so an
 	// unattributed autopilot dispatch delegating mid-chain is keyed on its
 	// autopilot creator only when the speaking task's lineage checks out.
-	delegationAuthority := h.autopilotDelegationAuthorityFromRequest(r, issue, authorType, authorID)
+	delegationAuthority := h.autopilotDelegationAuthorityFromRequest(r, issue, capAuthorType, capAuthorID)
 	// The comment is already saved; a blocked mention must not fail the whole
 	// request. Surface the per-target outcomes so the client can show partial
 	// success instead of a silent no-op (MUL-4525 §2).
-	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, originatorUserID, delegationAuthority, suppressAgentIDs)
+	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, parentComment, capAuthorType, capAuthorID, originatorUserID, delegationAuthority, suppressAgentIDs)
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -3152,7 +3168,15 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// CAPABILITY: edit authorization must require a verified agent identity to
+	// match "isAuthor" — otherwise a member forging X-Agent-ID/X-Task-ID for
+	// ANY agent (plus any task belonging to it) could edit that agent's past
+	// comments (actor-identity forgery class). Every downstream use of
+	// actorType/actorID in this handler is authorization, not attribution
+	// (the comment's real author stays existing.AuthorType/AuthorID), so it is
+	// safe to hold the capability-safe form under these same names.
+	rawActorType, rawActorID, verified := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, userID)
 	isAuthor := existing.AuthorType == actorType && uuidToString(existing.AuthorID) == actorID
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	if !isAuthor && !isAdmin {
@@ -3340,7 +3364,9 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// CAPABILITY: same reasoning as UpdateComment's isAuthor gate.
+	rawActorType, rawActorID, verified := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, userID)
 	isAuthor := comment.AuthorType == actorType && uuidToString(comment.AuthorID) == actorID
 	isAdmin := roleAllowed(member.Role, "owner", "admin")
 	if !isAuthor && !isAdmin {
@@ -3512,7 +3538,7 @@ func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (d
 		writeError(w, http.StatusNotFound, "comment not found")
 		return db.Comment{}, "", "", "", false
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 	return comment, workspaceID, actorType, actorID, true
 }
 

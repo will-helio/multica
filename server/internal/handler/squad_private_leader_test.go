@@ -395,6 +395,7 @@ func TestChildDone_SquadPrivateLeader_AgentActorWakesLeader(t *testing.T) {
 	})
 	r.Header.Set("X-Agent-ID", workerAgentID)
 	r.Header.Set("X-Task-ID", workerTaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	r = withURLParam(r, "id", child.ID)
 	testHandler.UpdateIssue(w, r)
 	if w.Code != http.StatusOK {
@@ -475,6 +476,7 @@ func TestComment_SquadPrivateLeader_AgentActorAllowed(t *testing.T) {
 	})
 	r.Header.Set("X-Agent-ID", otherAgentID)
 	r.Header.Set("X-Task-ID", taskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	r = withURLParam(r, "id", issueID)
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusCreated {

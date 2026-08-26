@@ -34,6 +34,35 @@ import (
 // invocable when U (the originator) is in B's allow-list. This prevents agents
 // from forming a channel that bypasses the owner's white-list.
 
+// capabilityActor collapses a resolveActor result into the identity that
+// CAPABILITY decisions (view/list/invoke/squad-evaluation/edit-authorization)
+// may trust — as opposed to ATTRIBUTION (comment/issue authorship, reactions,
+// uploads), which keeps using the raw resolveActor result unchanged.
+//
+// Only a task_token-VERIFIED agent identity may assert "agent" for a
+// capability check. The legacy X-Agent-ID/X-Task-ID header pair is not
+// stripped on the mul_ PAT / JWT auth path (the CLI/web app legitimately
+// send it for attribution), so any workspace member holding a normal token
+// can set it to an agent+task pair they do not control; resolveActor's
+// legacy branch only confirms internal consistency (the agent exists, the
+// task belongs to it), never that the caller IS that agent/process. Without
+// this downgrade, canAccessPrivateAgent/accessibleAgentIDs/restrictedAgentIDs/
+// canInvokeAgent (which all special-case actorType=="agent") would let any
+// member impersonate an arbitrary agent for access, listing, invocation, and
+// squad-evaluation purposes — the actor-identity forgery class.
+//
+// An unverified claim is NOT treated as the (unverifiable) claimed agent —
+// it is treated as the real authenticated member (userID), exactly as if no
+// X-Agent-ID/X-Task-ID had been sent at all. This fails closed: it can only
+// ever reduce what the caller is judged able to do, never grant more than
+// their own membership already allows.
+func capabilityActor(actorType, actorID string, verified bool, userID string) (string, string) {
+	if actorType == "agent" && verified {
+		return actorType, actorID
+	}
+	return "member", userID
+}
+
 // canInvokeAgent reports whether a run may be enqueued for `agent` on behalf of
 // the given actor. Judgement is by the *effective invoking user*:
 //   - member actor -> the member themselves (actorID)

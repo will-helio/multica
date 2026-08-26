@@ -66,7 +66,7 @@ func (h *Handler) SubscribeToIssue(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(issue.WorkspaceID)
 	// Default target: the caller, derived via resolveActor so an agent caller
 	// (X-Agent-ID set) subscribes itself rather than the underlying member.
-	callerActorType, callerActorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	callerActorType, callerActorID, _ := h.resolveActor(r, requestUserID(r), workspaceID)
 	targetUserType := callerActorType
 	targetUserID := callerActorID
 	var req struct {
@@ -144,7 +144,7 @@ func (h *Handler) unsubscribeFromIssue(w http.ResponseWriter, r *http.Request, s
 	workspaceID := uuidToString(issue.WorkspaceID)
 	// Default target: the caller, derived via resolveActor so an agent caller
 	// (X-Agent-ID set) unsubscribes itself rather than the underlying member.
-	callerActorType, callerActorID := h.resolveActor(r, requestUserID(r), workspaceID)
+	callerActorType, callerActorID, _ := h.resolveActor(r, requestUserID(r), workspaceID)
 	targetUserType := callerActorType
 	targetUserID := callerActorID
 	var req struct {

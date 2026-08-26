@@ -1580,9 +1580,12 @@ func (h *Handler) validateAutopilotAssigneeForSave(
 			return false
 		}
 		// Private-leader gate: the member configuring the autopilot must have
-		// access to the private leader, same as validateAssigneePair.
-		actorType, actorID := h.resolveActor(r, requestUserID(r), util.UUIDToString(workspaceID))
-		if !h.canInvokeAgent(r.Context(), leader, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), util.UUIDToString(workspaceID)) {
+		// access to the private leader, same as validateAssigneePair. CAPABILITY:
+		// requires a verified agent identity (actor-identity forgery class).
+		wsIDStr := util.UUIDToString(workspaceID)
+		rawActorType, rawActorID, verified := h.resolveActor(r, requestUserID(r), wsIDStr)
+		actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, requestUserID(r))
+		if !h.canInvokeAgent(r.Context(), leader, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), wsIDStr) {
 			writeError(w, http.StatusForbidden, "cannot assign autopilot to squad with private leader")
 			return false
 		}
@@ -2083,7 +2086,7 @@ func (h *Handler) TriggerAutopilot(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, userID, workspaceID)
 
 	run, reasonCode, err := h.AutopilotService.DispatchAutopilotManual(r.Context(), autopilot, pgtype.UUID{}, nil, memberActorUserID(actorType, actorID))
 	if err != nil {

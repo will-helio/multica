@@ -478,6 +478,7 @@ func TestCreateComment_TopLevelNewThreadFallsBackToAssignee(t *testing.T) {
 	r = withURLParam(r, "id", issueID)
 	r.Header.Set("X-Agent-ID", conversationAgentID)
 	r.Header.Set("X-Task-ID", conversationTaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("agent reply: expected 201, got %d: %s", w.Code, w.Body.String())
@@ -734,6 +735,7 @@ func TestCreateComment_ParentAgentReplyCancelsPromotedFallbackBeforeClaim(t *tes
 	r = withURLParam(r, "id", issueID)
 	r.Header.Set("X-Agent-ID", parentAgentID)
 	r.Header.Set("X-Task-ID", primaryTaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("agent ack comment: expected 201, got %d: %s", w.Code, w.Body.String())

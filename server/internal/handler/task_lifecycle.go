@@ -153,16 +153,22 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := uuidToString(issue.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	// actorType/actorID (unverified form) attribute the rerun to the human who
+	// triggered it (memberActorUserID below); the invoke re-check that follows
+	// is a CAPABILITY decision and must use the verified-required form (see
+	// capabilityActor) so a forged agent identity cannot rerun a private agent
+	// it may not invoke (actor-identity forgery class).
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
 	actorUserID := memberActorUserID(actorType, actorID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
 
 	// Re-validate the operator's invoke permission on the resolved target agent
 	// before cancelling / creating anything (MUL-4525). Issue visibility does not
 	// grant the right to trigger a private agent — a task_id rerun must gate the
 	// historical agent, not the (possibly reassigned) current assignee.
-	originatorUserID := h.invokeOriginatorFromRequest(r, actorType, actorID)
+	originatorUserID := h.invokeOriginatorFromRequest(r, capActorType, capActorID)
 	canInvoke := func(agent db.Agent) bool {
-		return h.canInvokeAgent(r.Context(), agent, actorType, actorID, originatorUserID, workspaceID)
+		return h.canInvokeAgent(r.Context(), agent, capActorType, capActorID, originatorUserID, workspaceID)
 	}
 
 	task, err := h.TaskService.RerunIssue(r.Context(), issue.ID, sourceTaskID, pgtype.UUID{}, actorUserID, canInvoke)

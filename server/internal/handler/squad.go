@@ -978,11 +978,15 @@ func (h *Handler) RecordSquadLeaderEvaluation(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Security: only the squad leader agent can record evaluations.
+	// Security: only the squad leader agent, acting on an unforgeable
+	// task_token, can record evaluations. verified is required here: the
+	// legacy X-Agent-ID/X-Task-ID pair only proves internal consistency
+	// (the agent exists, the task belongs to it), never that the caller IS
+	// the squad leader agent (actor-identity forgery class).
 	workspaceID := uuidToString(issue.WorkspaceID)
 	userID := requestUserID(r)
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if actorType != "agent" || actorID != uuidToString(squad.LeaderID) {
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	if actorType != "agent" || !verified || actorID != uuidToString(squad.LeaderID) {
 		writeError(w, http.StatusForbidden, "only the squad leader agent can record evaluations")
 		return
 	}

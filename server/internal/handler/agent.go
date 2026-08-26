@@ -835,7 +835,11 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	// are workspace owner/admin, and a public_to agent only when on its
 	// invocation allow-list. Targets are batch-loaded to avoid an N+1 and
 	// reused to enrich each response's invocation_targets.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	// CAPABILITY: only a verified agent identity may bypass the per-agent
+	// visibility filter below (actor-identity forgery class) — an unverified
+	// legacy claim is judged as the real member.
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
 	targetsByAgent, ok := h.loadInvocationTargetsByAgent(r.Context(), agents)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to load agent invocation targets")
@@ -844,8 +848,8 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 	visible := make([]AgentResponse, 0, len(agents))
 	for _, a := range agents {
 		targets := targetsByAgent[uuidToString(a.ID)]
-		if actorType == "member" {
-			if !memberAllowedToViewAgent(a, targets, actorID, member.Role) {
+		if capActorType == "member" {
+			if !memberAllowedToViewAgent(a, targets, capActorID, member.Role) {
 				continue
 			}
 		}
@@ -893,8 +897,10 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 	// render an explicit "no access" placeholder instead of a 404 — see
 	// agent-detail-page.tsx.
 	workspaceID := uuidToString(agent.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	userID := requestUserID(r)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canAccessPrivateAgent(r.Context(), agent, capActorType, capActorID, workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return
 	}
@@ -913,7 +919,6 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
-	userID := requestUserID(r)
 	ws, err := h.Queries.GetWorkspace(r.Context(), agent.WorkspaceID)
 	if err != nil {
 		slog.Warn("GetWorkspace failed for redact check", "workspace_id", uuidToString(agent.WorkspaceID), "error", err)
@@ -1223,7 +1228,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if err := h.enrichAgentResponseWithTargets(r.Context(), &resp, created.ID); err != nil {
 		slog.Warn("create agent: load invocation targets for response failed", append(logger.RequestAttrs(r), "error", err, "agent_id", uuidToString(created.ID))...)
 	}
-	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
+	actorType, actorID, _ := h.resolveActor(r, ownerID, workspaceID)
 	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	// Start the existing proactive introduction only after the complete Agent
@@ -1917,7 +1922,7 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("agent updated", append(logger.RequestAttrs(r), "agent_id", id, "workspace_id", uuidToString(updated.WorkspaceID))...)
 	userID := requestUserID(r)
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
+	actorType, actorID, _ := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
 	// Workspace admins / non-owner members pass canManageAgent for legitimate
@@ -2015,7 +2020,7 @@ func (h *Handler) ArchiveAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, wsID)
+	actorType, actorID, _ := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentArchived, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
@@ -2051,7 +2056,7 @@ func (h *Handler) RestoreAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := requestUserID(r)
-	actorType, actorID := h.resolveActor(r, userID, wsID)
+	actorType, actorID, _ := h.resolveActor(r, userID, wsID)
 	h.publish(protocol.EventAgentRestored, wsID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
 	writeJSON(w, http.StatusOK, resp)
@@ -2104,8 +2109,10 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	// Run history is part of the private-agent gate ("查看历史会话"). Same
 	// 403 semantics as GetAgent.
 	workspaceID := uuidToString(agent.WorkspaceID)
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	userID := requestUserID(r)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canAccessPrivateAgent(r.Context(), agent, capActorType, capActorID, workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return
 	}
@@ -2251,8 +2258,9 @@ func (h *Handler) ListWorkspaceWorkingAgents(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, requestUserID(r), workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, requestUserID(r))
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -2292,8 +2300,9 @@ func (h *Handler) GetWorkspaceAgentRunCounts(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, requestUserID(r), workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, requestUserID(r))
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -2333,8 +2342,9 @@ func (h *Handler) GetWorkspaceAgentActivity30d(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, requestUserID(r), workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, requestUserID(r))
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -2382,8 +2392,9 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, requestUserID(r), workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, requestUserID(r), workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, requestUserID(r))
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return

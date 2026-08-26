@@ -202,7 +202,7 @@ func (h *Handler) SetAgentRuntimeSkillEnabled(w http.ResponseWriter, r *http.Req
 		slog.Warn("runtime skill toggle: load agent skills for broadcast failed",
 			append(logger.RequestAttrs(r), "error", err, "agent_id", agentID)...)
 	}
-	actorType, actorID := h.resolveActor(r, requestUserID(r), uuidToString(locked.WorkspaceID))
+	actorType, actorID, _ := h.resolveActor(r, requestUserID(r), uuidToString(locked.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(locked.WorkspaceID), actorType, actorID,
 		map[string]any{"agent": broadcastAgentResponse(resp)})
 

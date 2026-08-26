@@ -428,7 +428,7 @@ func (h *Handler) requireQuickActionActor(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return "", "", false
 	}
-	if actorType, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
+	if actorType, _, _ := h.resolveActor(r, userID, workspaceID); actorType == "agent" {
 		writeError(w, http.StatusForbidden, "agents cannot manage quick actions")
 		return "", "", false
 	}
@@ -811,7 +811,8 @@ func (h *Handler) RenderQuickAction(w http.ResponseWriter, r *http.Request) {
 		h.writeDispatchBlocked(w, http.StatusConflict, ReasonTargetUnavailable)
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	rawActorType, rawActorID, verified := h.resolveActor(r, userID, workspaceID)
+	actorType, actorID := capabilityActor(rawActorType, rawActorID, verified, userID)
 	// Same gate as the run path: the preview would otherwise hand a user the
 	// exact text needed to trigger an agent they may not invoke.
 	if !h.canInvokeAgent(r.Context(), target.Agent, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), workspaceID) {
@@ -874,11 +875,16 @@ func (h *Handler) RunQuickAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	originatorUserID := h.invokeOriginatorFromRequest(r, actorType, actorID)
+	// actorType/actorID are ATTRIBUTION (the resulting comment's authorship) —
+	// kept on the unverified legacy form, exactly like CreateComment.
+	// capActorType/capActorID are the verified-required CAPABILITY form used
+	// for the invoke gate and @-mention re-triggering below.
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	originatorUserID := h.invokeOriginatorFromRequest(r, capActorType, capActorID)
 	// The single permission gate. Issue visibility never implies the right to
 	// trigger someone's private agent.
-	if !h.canInvokeAgent(r.Context(), target.Agent, actorType, actorID, originatorUserID, workspaceID) {
+	if !h.canInvokeAgent(r.Context(), target.Agent, capActorType, capActorID, originatorUserID, workspaceID) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return
 	}
@@ -913,8 +919,8 @@ func (h *Handler) RunQuickAction(w http.ResponseWriter, r *http.Request) {
 		"issue_status":        issue.Status,
 	})
 
-	delegationAuthority := h.autopilotDelegationAuthorityFromRequest(r, issue, actorType, actorID)
-	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, nil, actorType, actorID, originatorUserID, delegationAuthority, nil)
+	delegationAuthority := h.autopilotDelegationAuthorityFromRequest(r, issue, capActorType, capActorID)
+	resp.TriggerOutcomes = h.triggerTasksForComment(r.Context(), issue, comment, nil, capActorType, capActorID, originatorUserID, delegationAuthority, nil)
 
 	// Usage telemetry is best-effort and deliberately outside the run's
 	// success path: a failed counter must never cost the user the run.

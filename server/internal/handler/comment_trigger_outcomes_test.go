@@ -284,6 +284,7 @@ func TestCreateComment_SquadLeaderSelfMentionCompletedTaskDoesNotFakeSuccess(t *
 	// Author the comment AS the leader agent (A2A self-mention).
 	r.Header.Set("X-Agent-ID", leaderID)
 	r.Header.Set("X-Task-ID", completedTaskID)
+	r.Header.Set("X-Actor-Source", "task_token") // simulate a genuine mat_ token request (verified agent identity)
 	testHandler.CreateComment(w, r)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("CreateComment: expected 201, got %d: %s", w.Code, w.Body.String())

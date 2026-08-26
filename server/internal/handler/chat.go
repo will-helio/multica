@@ -84,8 +84,9 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 	// Invocation gate: starting a chat produces agent runs, so it uses the
 	// invoke permission (MUL-3963), not the softer view gate. Agent-to-agent
 	// chat sessions are judged by the top-of-chain originator.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canInvokeAgent(r.Context(), agent, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), workspaceID) {
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canInvokeAgent(r.Context(), agent, capActorType, capActorID, h.invokeOriginatorFromRequest(r, capActorType, capActorID), workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return
 	}
@@ -162,8 +163,9 @@ func (h *Handler) ListChatSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -277,8 +279,9 @@ func (h *Handler) gateChatSessionForUser(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusNotFound, "agent not found")
 		return db.ChatSession{}, false
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canAccessPrivateAgent(r.Context(), agent, capActorType, capActorID, workspaceID) {
 		writeError(w, http.StatusForbidden, "you do not have access to this agent")
 		return db.ChatSession{}, false
 	}
@@ -763,8 +766,9 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	// removed from the allow-list), and it must fail BEFORE we persist the user
 	// message / attachments / task. Blocked returns a structured, enumeration-safe
 	// reason so the composer can explain it without leaking private-agent details.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canInvokeAgent(r.Context(), agent, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), workspaceID) {
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canInvokeAgent(r.Context(), agent, capActorType, capActorID, h.invokeOriginatorFromRequest(r, capActorType, capActorID), workspaceID) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return
 	}
@@ -941,8 +945,9 @@ func (h *Handler) RegenerateChatQuickActions(w http.ResponseWriter, r *http.Requ
 	// INVOKE gate as a send (MUL-4525) rather than the softer view gate in
 	// gateChatSessionForUser. Deliberately NOT relaxed as a side effect of
 	// moving generation server-side.
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	if !h.canInvokeAgent(r.Context(), agent, actorType, actorID, h.invokeOriginatorFromRequest(r, actorType, actorID), workspaceID) {
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	if !h.canInvokeAgent(r.Context(), agent, capActorType, capActorID, h.invokeOriginatorFromRequest(r, capActorType, capActorID), workspaceID) {
 		h.writeDispatchBlocked(w, http.StatusForbidden, ReasonInvocationNotAllowed)
 		return
 	}
@@ -1306,8 +1311,9 @@ func (h *Handler) ListPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -1376,8 +1382,9 @@ func (h *Handler) HasPendingChatTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, workspaceID)
-	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
+	actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+	capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, capActorType, capActorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
 		return
@@ -1514,8 +1521,9 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "task not found")
 			return
 		}
-		actorType, actorID := h.resolveActor(r, userID, workspaceID)
-		if !h.canAccessPrivateAgent(r.Context(), agent, actorType, actorID, workspaceID) {
+		actorType, actorID, verified := h.resolveActor(r, userID, workspaceID)
+		capActorType, capActorID := capabilityActor(actorType, actorID, verified, userID)
+		if !h.canAccessPrivateAgent(r.Context(), agent, capActorType, capActorID, workspaceID) {
 			writeError(w, http.StatusForbidden, "you do not have access to this agent")
 			return
 		}
