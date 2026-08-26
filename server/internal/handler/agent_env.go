@@ -53,16 +53,18 @@ type UpdateAgentEnvRequest struct {
 // authorizeAgentEnv enforces the per-request auth contract for the env
 // endpoints:
 //
-//  1. An agent actor may access ONLY its own env: resolveActor's
-//     "agent" result is trusted for identity, but is allowed through
-//     here only when it names the exact agent in the URL. Any agent
-//     token acting on a DIFFERENT agent's env — including one whose
-//     backing human owns the target agent — is rejected. This keeps
-//     the MUL-2600 impersonation/lateral-movement protection (an agent
-//     cannot use its host's owner credentials to reveal another
-//     agent's secrets) while closing the self-access gap: an agent
-//     could not previously read or rotate its own custom_env, forcing
-//     every such change through a human with an owner-level token.
+//  1. An agent actor may access ONLY its own env, and only via the
+//     unforgeable task_token signal (X-Actor-Source == "task_token");
+//     resolveActor's legacy X-Agent-ID/X-Task-ID fallback is never
+//     trusted here, since a plain member can forge that pair with a
+//     normal PAT. Any agent token acting on a DIFFERENT agent's env —
+//     including one whose backing human owns the target agent — is
+//     rejected too. This keeps the MUL-2600 impersonation/lateral-
+//     movement protection (an agent cannot use its host's owner
+//     credentials to reveal another agent's secrets) while closing the
+//     self-access gap: an agent could not previously read or rotate
+//     its own custom_env, forcing every such change through a human
+//     with an owner-level token.
 //  2. A human (member) actor must be a workspace owner/admin, or the
 //     agent's own human owner (MUL-5438).
 //
@@ -94,13 +96,30 @@ func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (age
 	// and cannot be forged or widened by a client-supplied header.
 	resolvedType, resolvedID := h.resolveActor(r, userID, workspaceID)
 	if resolvedType == "agent" {
-		// Self-access exception: an agent may read/write ONLY its own
-		// custom_env. resolvedID is the agent_id bound to the caller's
-		// task token (or the validated task/agent pair on the legacy
-		// header path), so comparing it against the target agent in the
-		// URL is a safe caller==target check. Any other agent id —
-		// including one backed by the target agent's own human owner —
-		// stays a 403, exactly as before.
+		// Self-access is granted ONLY for the unforgeable task_token
+		// signal. resolveActor's other "agent" path — the legacy
+		// X-Agent-ID/X-Task-ID header pair — only checks internal
+		// consistency (the agent exists, the task belongs to it); it
+		// never confirms the CALLER is that agent. The auth middleware
+		// strips a client-supplied X-Actor-Source but does NOT strip
+		// X-Agent-ID/X-Task-ID on the mul_ PAT / JWT path (those headers
+		// are legitimately used there for CLI/web attribution — see
+		// cli.APIClient.AgentID/TaskID and corsAllowedHeaders), so a
+		// plain workspace member could otherwise send a normal PAT plus
+		// a forged X-Agent-ID/X-Task-ID pair for any task they can see
+		// and pass through here as that agent. Requiring task_token
+		// specifically closes that; it mirrors the same gate
+		// chatHistorySession and RequireHumanActor already apply for
+		// the identical reason.
+		if r.Header.Get("X-Actor-Source") != "task_token" {
+			writeError(w, http.StatusForbidden, "agents may not access env management endpoints")
+			return db.Agent{}, "", "", false
+		}
+		// resolvedID is the agent_id bound to the caller's task token,
+		// so comparing it against the target agent in the URL is a safe
+		// caller==target check. Any other agent id — including one
+		// backed by the target agent's own human owner — stays a 403,
+		// exactly as before.
 		if resolvedID != uuidToString(agent.ID) {
 			writeError(w, http.StatusForbidden, "agents may not access another agent's env management endpoints")
 			return db.Agent{}, "", "", false
