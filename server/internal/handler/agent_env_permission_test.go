@@ -375,3 +375,59 @@ func TestAgentEnv_AgentCannotAccessAnotherAgentsEnv(t *testing.T) {
 		t.Errorf("forbidden update must leave custom_env untouched, got: %s", stored)
 	}
 }
+
+// TestAgentEnv_ForgedLegacyHeaderPairDenied is the regression test for
+// the escalation the task_token-only gate closes: a plain workspace
+// member (no owner/admin role, not the target agent's owner) sends a
+// normal PAT/JWT-authenticated request (no X-Actor-Source) and forges
+// X-Agent-ID + X-Task-ID naming the target agent and one of its real
+// tasks. resolveActor's legacy fallback validates that pair as
+// internally consistent and returns actorType "agent" for the target —
+// which, if trusted here, would let any member who can see a task id
+// on the board read or rewrite that agent's custom_env. It must stay a
+// 403, identically to TestAgentEnv_UnrelatedMemberForbidden.
+func TestAgentEnv_ForgedLegacyHeaderPairDenied(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	targetID, _ := agentEnvOwnerFixture(t, "env-forged-target-agent", "env-forged-owner@multica.test")
+	targetTaskID := createHandlerTestTaskForAgent(t, targetID)
+	strangerID := createPermissionTestMember(t, "env-forger@multica.test")
+
+	cases := []struct {
+		name string
+		fn   func(http.ResponseWriter, *http.Request)
+		body any
+	}{
+		{"reveal", testHandler.GetAgentEnv, nil},
+		{"update", testHandler.UpdateAgentEnv, map[string]any{"custom_env": map[string]string{"API_KEY": "forged"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			method := http.MethodGet
+			if tc.body != nil {
+				method = http.MethodPut
+			}
+			req := withURLParam(newRequestAs(strangerID, method, "/api/agents/"+targetID+"/env", tc.body), "id", targetID)
+			// No X-Actor-Source: this simulates a normal mul_ PAT / JWT
+			// request. X-Agent-ID/X-Task-ID are client-forged, naming
+			// the target agent and one of its real tasks.
+			req.Header.Set("X-Agent-ID", targetID)
+			req.Header.Set("X-Task-ID", targetTaskID)
+			w := httptest.NewRecorder()
+			tc.fn(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 for a forged legacy header pair, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+
+	var stored string
+	if err := testPool.QueryRow(context.Background(), `SELECT custom_env::text FROM agent WHERE id = $1`, targetID).Scan(&stored); err != nil {
+		t.Fatalf("read back custom_env: %v", err)
+	}
+	if !strings.Contains(stored, "secret-value") {
+		t.Errorf("forbidden forged-header update must leave custom_env untouched, got: %s", stored)
+	}
+}
