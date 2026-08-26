@@ -254,3 +254,124 @@ func TestAgentEnv_AgentActorRejectedForOwnedAgent(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentEnv_AgentCanRevealAndUpdateOwnEnv is the fix: an agent
+// authenticated via its own task token (X-Actor-Source: task_token,
+// paired with its own X-Agent-ID) may read and write its OWN
+// custom_env without a human operator. Every prior change to
+// custom_env required an owner-level token — this closes that gap
+// while keeping the MUL-2600 boundary at "this agent, and only this
+// agent" (see TestAgentEnv_AgentActorRejectedForOwnedAgent and
+// TestAgentEnv_AgentCannotAccessAnotherAgentsEnv for the boundary).
+func TestAgentEnv_AgentCanRevealAndUpdateOwnEnv(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID, _ := agentEnvOwnerFixture(t, "env-self-access-agent", "env-self-access-owner@multica.test")
+
+	req := withURLParam(newRequest(http.MethodGet, "/api/agents/"+agentID+"/env", nil), "id", agentID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	w := httptest.NewRecorder()
+	testHandler.GetAgentEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentEnv as the agent itself: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp AgentEnvResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode reveal response: %v", err)
+	}
+	if resp.CustomEnv["API_KEY"] != "secret-value" {
+		t.Fatalf("expected plaintext API_KEY, got %v", resp.CustomEnv)
+	}
+
+	body := map[string]any{"custom_env": map[string]string{"API_KEY": "self-rotated-value"}}
+	req = withURLParam(newRequest(http.MethodPut, "/api/agents/"+agentID+"/env", body), "id", agentID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	w = httptest.NewRecorder()
+	testHandler.UpdateAgentEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgentEnv as the agent itself: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var stored string
+	if err := testPool.QueryRow(ctx, `SELECT custom_env::text FROM agent WHERE id = $1`, agentID).Scan(&stored); err != nil {
+		t.Fatalf("read back custom_env: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal([]byte(stored), &got); err != nil {
+		t.Fatalf("decode stored custom_env: %v", err)
+	}
+	if got["API_KEY"] != "self-rotated-value" {
+		t.Errorf("expected the self-rotated value on disk, got %v", got)
+	}
+
+	// Audit must attribute the acting agent, not a human.
+	var actorType, actorIDCol, details string
+	if err := testPool.QueryRow(ctx, `
+		SELECT actor_type, actor_id::text, details::text FROM activity_log
+		WHERE workspace_id = $1 AND action = 'agent_env_updated' AND details->>'agent_id' = $2
+		ORDER BY created_at DESC LIMIT 1
+	`, testWorkspaceID, agentID).Scan(&actorType, &actorIDCol, &details); err != nil {
+		t.Fatalf("expected agent_env_updated activity row: %v", err)
+	}
+	if actorType != "agent" {
+		t.Errorf("audit actor_type = %s; want agent", actorType)
+	}
+	if actorIDCol != agentID {
+		t.Errorf("audit actor_id = %s; want the acting agent %s", actorIDCol, agentID)
+	}
+	if strings.Contains(details, "secret-value") || strings.Contains(details, "self-rotated-value") {
+		t.Errorf("activity details must NOT contain env values, got: %s", details)
+	}
+}
+
+// TestAgentEnv_AgentCannotAccessAnotherAgentsEnv exercises the primary
+// production auth path (X-Actor-Source: task_token) for the boundary
+// the self-access fix must not widen: an agent's own task token grants
+// access to its own env only, never another agent's, even within the
+// same workspace.
+func TestAgentEnv_AgentCannotAccessAnotherAgentsEnv(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	targetID, _ := agentEnvOwnerFixture(t, "env-other-target-agent", "env-other-target-owner@multica.test")
+	callerAgentID := createHandlerTestAgent(t, "env-other-caller-agent", nil)
+
+	cases := []struct {
+		name string
+		fn   func(http.ResponseWriter, *http.Request)
+		body any
+	}{
+		{"reveal", testHandler.GetAgentEnv, nil},
+		{"update", testHandler.UpdateAgentEnv, map[string]any{"custom_env": map[string]string{"API_KEY": "exfiltrated"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			method := http.MethodGet
+			if tc.body != nil {
+				method = http.MethodPut
+			}
+			req := withURLParam(newRequest(method, "/api/agents/"+targetID+"/env", tc.body), "id", targetID)
+			req.Header.Set("X-Actor-Source", "task_token")
+			req.Header.Set("X-Agent-ID", callerAgentID)
+			w := httptest.NewRecorder()
+			tc.fn(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("expected 403 for a different agent's own task token, got %d: %s", w.Code, w.Body.String())
+			}
+		})
+	}
+
+	var stored string
+	if err := testPool.QueryRow(context.Background(), `SELECT custom_env::text FROM agent WHERE id = $1`, targetID).Scan(&stored); err != nil {
+		t.Fatalf("read back custom_env: %v", err)
+	}
+	if !strings.Contains(stored, "secret-value") {
+		t.Errorf("forbidden update must leave custom_env untouched, got: %s", stored)
+	}
+}
