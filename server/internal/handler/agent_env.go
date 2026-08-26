@@ -53,15 +53,18 @@ type UpdateAgentEnvRequest struct {
 // authorizeAgentEnv enforces the per-request auth contract for the env
 // endpoints:
 //
-//  1. The actor MUST resolve to a member (human). Any request authored
-//     by an agent token — even one whose backing member is a workspace
-//     owner, or the very human who owns the target agent — is rejected.
-//     This is the key fix for the impersonation/lateral-movement risk
-//     that motivated MUL-2600: an agent running in the workspace cannot
-//     use its host's owner credentials to reveal another agent's
-//     secrets.
-//  2. The member must be a workspace owner/admin, or the agent's own
-//     human owner (MUL-5438).
+//  1. An agent actor may access ONLY its own env: resolveActor's
+//     "agent" result is trusted for identity, but is allowed through
+//     here only when it names the exact agent in the URL. Any agent
+//     token acting on a DIFFERENT agent's env — including one whose
+//     backing human owns the target agent — is rejected. This keeps
+//     the MUL-2600 impersonation/lateral-movement protection (an agent
+//     cannot use its host's owner credentials to reveal another
+//     agent's secrets) while closing the self-access gap: an agent
+//     could not previously read or rotate its own custom_env, forcing
+//     every such change through a human with an owner-level token.
+//  2. A human (member) actor must be a workspace owner/admin, or the
+//     agent's own human owner (MUL-5438).
 //
 // Rule 2 used to be workspace-role-only, which made env the single
 // endpoint in the agent permission model that ignored agent ownership:
@@ -71,38 +74,50 @@ type UpdateAgentEnvRequest struct {
 // from any member — so a member could write secrets into their own
 // agent and then never read or rotate them.
 //
-// Returns the loaded agent and the authenticated member on success.
-// All non-2xx branches write their own response and return ok=false.
-func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (db.Agent, db.Member, bool) {
+// Returns the loaded agent and the resolved actor (type + id) on
+// success. All non-2xx branches write their own response and return
+// ok=false.
+func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (agent db.Agent, actorType string, actorID string, ok bool) {
 	agentID := chi.URLParam(r, "id")
-	agent, ok := h.loadAgentForUser(w, r, agentID)
+	agent, ok = h.loadAgentForUser(w, r, agentID)
 	if !ok {
-		return db.Agent{}, db.Member{}, false
+		return db.Agent{}, "", "", false
 	}
 
 	workspaceID := uuidToString(agent.WorkspaceID)
 	userID := requestUserID(r)
 
-	// Reject agent actors before anything else. resolveActor returns
-	// "agent" iff both X-Agent-ID and a valid X-Task-ID are present and
-	// the task belongs to that agent — so this guard is precise and
-	// cannot be tricked by a member-supplied header.
-	actorType, _ := h.resolveActor(r, userID, workspaceID)
-	if actorType == "agent" {
-		writeError(w, http.StatusForbidden, "agents may not access env management endpoints")
-		return db.Agent{}, db.Member{}, false
+	// resolveActor returns "agent" iff both X-Agent-ID and a valid
+	// X-Task-ID are present and the task belongs to that agent (or the
+	// request carries the server-stamped X-Actor-Source: task_token,
+	// which resolveActor trusts directly) — so this identity is precise
+	// and cannot be forged or widened by a client-supplied header.
+	resolvedType, resolvedID := h.resolveActor(r, userID, workspaceID)
+	if resolvedType == "agent" {
+		// Self-access exception: an agent may read/write ONLY its own
+		// custom_env. resolvedID is the agent_id bound to the caller's
+		// task token (or the validated task/agent pair on the legacy
+		// header path), so comparing it against the target agent in the
+		// URL is a safe caller==target check. Any other agent id —
+		// including one backed by the target agent's own human owner —
+		// stays a 403, exactly as before.
+		if resolvedID != uuidToString(agent.ID) {
+			writeError(w, http.StatusForbidden, "agents may not access another agent's env management endpoints")
+			return db.Agent{}, "", "", false
+		}
+		return agent, "agent", resolvedID, true
 	}
 
 	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "agent not found", "owner", "admin", "member")
 	if !ok {
-		return db.Agent{}, db.Member{}, false
+		return db.Agent{}, "", "", false
 	}
 	if !canManageAgentEnv(agent, member) {
 		writeError(w, http.StatusForbidden, "only the agent owner or a workspace owner/admin can manage this agent's env")
-		return db.Agent{}, db.Member{}, false
+		return db.Agent{}, "", "", false
 	}
 
-	return agent, member, true
+	return agent, "member", uuidToString(member.UserID), true
 }
 
 // canManageAgentEnv is the pure half of the env authorization rule:
@@ -138,7 +153,7 @@ func canManageAgentEnv(agent db.Agent, member db.Member) bool {
 // can fix it; the alternative — quietly handing out secrets — is
 // invisible.
 func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
-	agent, member, ok := h.authorizeAgentEnv(w, r)
+	agent, actorType, actorID, ok := h.authorizeAgentEnv(w, r)
 	if !ok {
 		return
 	}
@@ -155,8 +170,8 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 	if _, err := h.Queries.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: agent.WorkspaceID,
 		IssueID:     pgtype.UUID{}, // env access is not tied to an issue
-		ActorType:   pgtype.Text{String: "member", Valid: true},
-		ActorID:     parseUUID(uuidToString(member.UserID)),
+		ActorType:   pgtype.Text{String: actorType, Valid: true},
+		ActorID:     parseUUID(actorID),
 		Action:      agentEnvActivityRevealed,
 		Details:     details,
 	}); err != nil {
@@ -186,7 +201,7 @@ func (h *Handler) GetAgentEnv(w http.ResponseWriter, r *http.Request) {
 // an unaudited env mutation on disk, and a persist failure does not
 // leave a phantom audit row claiming a change that never happened.
 func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
-	agent, member, ok := h.authorizeAgentEnv(w, r)
+	agent, actorType, actorID, ok := h.authorizeAgentEnv(w, r)
 	if !ok {
 		return
 	}
@@ -242,8 +257,8 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 	if _, err := qtx.CreateActivity(r.Context(), db.CreateActivityParams{
 		WorkspaceID: agent.WorkspaceID,
 		IssueID:     pgtype.UUID{},
-		ActorType:   pgtype.Text{String: "member", Valid: true},
-		ActorID:     parseUUID(uuidToString(member.UserID)),
+		ActorType:   pgtype.Text{String: actorType, Valid: true},
+		ActorID:     parseUUID(actorID),
 		Action:      agentEnvActivityUpdated,
 		Details:     details,
 	}); err != nil {
@@ -272,7 +287,7 @@ func (h *Handler) UpdateAgentEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workspaceID := uuidToString(updated.WorkspaceID)
-	h.publish(protocol.EventAgentStatus, workspaceID, "member", uuidToString(member.UserID), map[string]any{"agent": broadcastAgentResponse(resp)})
+	h.publish(protocol.EventAgentStatus, workspaceID, actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 
 	writeJSON(w, http.StatusOK, AgentEnvResponse{
 		AgentID:   uuidToString(updated.ID),
