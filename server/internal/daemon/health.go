@@ -492,6 +492,8 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			checkoutRef = d.taskRepoDefaultRef(req.WorkspaceID, req.TaskID, req.URL)
 		}
 
+		mirrorURL := d.repoMirrorURL(req.WorkspaceID, req.URL)
+
 		params := repocache.WorktreeParams{
 			WorkspaceID:         req.WorkspaceID,
 			RepoURL:             req.URL,
@@ -502,6 +504,7 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
 			IsolatedGitMetadata: req.CheckoutMode == repoCheckoutModeIsolated,
 			Fresh:               req.Fresh,
+			MirrorURL:           mirrorURL,
 		}
 		if req.RetryBusy {
 			params.LockWaitTimeout = repoCheckoutLockWaitTimeout

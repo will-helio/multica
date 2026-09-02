@@ -742,6 +742,7 @@ type WorktreeParams struct {
 	// unpushed commits. Without it, an existing checkout that holds work or is
 	// already on this task's branch is kept as it is.
 	Fresh bool
+	MirrorURL           string // when set, a second git push URL added to origin so agent pushes reach both the primary remote and this mirror (HEL-332)
 }
 
 // WorktreeResult describes a successfully created worktree.
@@ -896,6 +897,9 @@ func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams
 		if err := ctx.Err(); err != nil {
 			return nil, context.Cause(ctx)
 		}
+		if err := applyMirrorPushURL(worktreePath, params.RepoURL, params.MirrorURL); err != nil {
+			c.logger.Warn("repo checkout: apply mirror push url failed (non-fatal)", "error", err)
+		}
 
 		c.logCheckoutReady("repo checkout: isolated checkout ready", params.RepoURL, baseRef, result)
 		return result, nil
@@ -926,6 +930,9 @@ func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams
 		if err := ctx.Err(); err != nil {
 			return nil, context.Cause(ctx)
 		}
+		if err := applyMirrorPushURL(worktreePath, params.RepoURL, params.MirrorURL); err != nil {
+			c.logger.Warn("repo checkout: apply mirror push url failed (non-fatal)", "error", err)
+		}
 
 		c.logCheckoutReady("repo checkout: existing worktree updated", params.RepoURL, baseRef, result)
 		return result, nil
@@ -953,6 +960,9 @@ func (c *Cache) CreateWorktreeContext(ctx context.Context, params WorktreeParams
 	c.applyCoAuthoredBySettingContext(ctx, worktreePath, params)
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
+	}
+	if err := applyMirrorPushURL(worktreePath, params.RepoURL, params.MirrorURL); err != nil {
+		c.logger.Warn("repo checkout: apply mirror push url failed (non-fatal)", "error", err)
 	}
 
 	c.logger.Info("repo checkout: worktree created",
@@ -1297,6 +1307,28 @@ func setIsolatedCheckoutOriginContext(ctx context.Context, path, repoURL string)
 	out, err := runGitCombinedOutputContext(ctx, "-C", path, "remote", "set-url", "origin", repoURL)
 	if err != nil {
 		return fmt.Errorf("set origin remote: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// applyMirrorPushURL configures origin in gitDir to push to BOTH repoURL
+// and mirrorURL, while fetch continues to use repoURL. Git only pushes to
+// remote.<name>.pushurl entries when any exist (it does NOT also push to
+// .url as a fallback once .pushurl is set), so both must be listed
+// explicitly. Re-running this is idempotent: it always resets to exactly
+// these two entries, so a mirror added or changed later self-heals on the
+// next checkout without leaving stale entries behind. A no-op when
+// mirrorURL is empty (the vast majority of repos), leaving push
+// behaviour exactly as it was before HEL-332.
+func applyMirrorPushURL(gitDir, repoURL, mirrorURL string) error {
+	if mirrorURL == "" {
+		return nil
+	}
+	if out, err := runGitCombinedOutput("-C", gitDir, "remote", "set-url", "--push", "origin", repoURL); err != nil {
+		return fmt.Errorf("reset origin push url: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := runGitCombinedOutput("-C", gitDir, "remote", "set-url", "--push", "--add", "origin", mirrorURL); err != nil {
+		return fmt.Errorf("add mirror push url: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
