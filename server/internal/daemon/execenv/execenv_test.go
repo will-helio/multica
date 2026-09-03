@@ -989,6 +989,10 @@ func TestInjectRuntimeConfigBackgroundTaskSafetyProviderAgnostic(t *testing.T) {
 			s := string(data)
 			for _, want := range []string{
 				"## Background Task Safety",
+				// The orphan rule is scoped to run-owned work — an unscoped
+				// "anything still running" would sweep in external systems
+				// (GitHub Actions) the section later says NOT to wait for.
+				"any run-owned work still active is orphaned",
 				"Do NOT end your turn while background tasks",
 				"wait for a future notification/reminder",
 				"run the work synchronously instead",
@@ -1002,9 +1006,16 @@ func TestInjectRuntimeConfigBackgroundTaskSafetyProviderAgnostic(t *testing.T) {
 				// an explicit, verified handoff with a cleanup handle.
 				"persistent service handoff",
 				"running service itself is the requested deliverable",
-				"stdio redirected to durable logs",
-				"PID/profile",
-				"verify readiness before replying",
+				// MUL-5442: pin the handoff concepts, not the operational
+				// phrasing — but the cleanup handle must stay general (a
+				// supervisor/profile-managed service has no single stable PID)
+				// and the user-facing reply must keep the full URL/logs/stop
+				// triple (durable logs alone are unobservable if the user is
+				// never told where they are).
+				"durable logs",
+				"cleanup handle such as PID/profile",
+				"verify readiness",
+				"URL, logs, and stop instructions",
 				"survival as best-effort, not guaranteed",
 				"does not cover tests, builds, CI polling",
 				"are not agent-owned background tasks",
@@ -1078,10 +1089,31 @@ func TestInjectRuntimeConfigAvailableCommandsCoreOnly(t *testing.T) {
 		"multica issue status <id> <status>",
 		"multica issue comment add <issue-id>",
 		"multica issue comment add --help",
-		"multica squad member set-role <squad-id>",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("AGENTS.md missing core command/help text %q\n---\n%s", want, s)
+		}
+	}
+
+	// Squad maintenance is squad-leader surface and is gated on that (MUL-5442):
+	// an agent leading no squad has no squad whose roles it could change.
+	if strings.Contains(s, "### Squad maintenance") {
+		t.Errorf("non-leader brief must not carry the squad maintenance block\n---\n%s", s)
+	}
+	leaderDir := t.TempDir()
+	if _, err := InjectRuntimeConfig(leaderDir, "codex", TaskContextForEnv{IssueID: "issue-1", IsSquadLeader: true}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	leader, err := os.ReadFile(filepath.Join(leaderDir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("failed to read leader AGENTS.md: %v", err)
+	}
+	for _, want := range []string{
+		"### Squad maintenance",
+		"multica squad member set-role <squad-id>",
+	} {
+		if !strings.Contains(string(leader), want) {
+			t.Errorf("squad-leader AGENTS.md missing %q\n---\n%s", want, leader)
 		}
 	}
 
@@ -4953,11 +4985,20 @@ func TestInjectRuntimeConfigMentionLoopHardening(t *testing.T) {
 	t.Run("workflow-carries-silence-as-exit-and-no-signoff-mention", func(t *testing.T) {
 		t.Parallel()
 		s := readClaudeMD(t, commentTriggerCtx)
-		// The anti-loop signal for CLAUDE.md lives in the numbered workflow
-		// steps (4 + 5), not in a dedicated preamble. Lock in the key phrases
-		// so the signal can't decay back into pure prose again.
+		// The anti-loop signal must reach the brief; lock in the key phrases so
+		// it can't decay back into pure prose again. The reply-warranted rules
+		// live in the Reply mode block, while the no-sign-off-mention rule is
+		// mention policy and lives in `## Mentions` (MUL-5442) — these
+		// assertions are file-wide on purpose, so the signal is pinned without
+		// pinning which section carries it.
 		for _, want := range []string{
 			"Decide whether a reply is warranted",
+			// Both outcomes pinned individually (MUL-5442 stage-1 review):
+			// the work-produced arm and the silent-exit arm must each
+			// survive compression, not just the bullet's heading.
+			"produced actual work",
+			"pure acknowledgment / thanks / sign-off",
+			"do NOT reply",
 			"Silence is a valid and preferred way",
 			"Never @mention the agent you are replying to as a thank-you or sign-off",
 		} {
@@ -5440,14 +5481,12 @@ func TestInjectRuntimeConfigAssignmentTriggerScansRootsFirst(t *testing.T) {
 			t.Errorf("assignment Workflow regressed mandatory scan-first catch-up, missing %q\n---\n%s", want, s)
 		}
 	}
-	// Older context must remain reachable through pagination. The cursor label
-	// and flags are documented in `## Available Commands` rather than restated
-	// inside the step (MUL-5372), so assert the label itself, not the literal
-	// `Next thread cursor: ...` stderr line the old step-3 copy quoted.
+	// Older context must remain reachable through pagination. The cursor
+	// labels and flags now live in the CLI's own --help (MUL-5442, pinned by
+	// TestIssueCommentListHelpCarriesReadContract in cmd/multica); the brief
+	// keeps a pointer in the flag reference.
 	for _, want := range []string{
-		"Next thread cursor",
-		"--before",
-		"--before-id",
+		"paging cursors, and full flag semantics: `--help`",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("assignment Workflow missing older-history pagination guidance %q\n---\n%s", want, s)
@@ -5502,11 +5541,11 @@ func TestInjectRuntimeConfigCatchUpScansRootsFirst(t *testing.T) {
 		"multica issue comment list issue-1 --roots-only --summary --output json",
 		// ...followed by an explicit, bounded drill-down.
 		"multica issue comment list issue-1 --thread <thread-id> --tail 30 --output json",
-		// The saturation semantics that made --recent 10 misleading are stated
-		// once, in the flag reference rather than in the step.
+		// The headline saturation warning stays in the flag reference; the
+		// deep semantics (per-thread cap, root-thread saturation) moved to the
+		// CLI's own --help (MUL-5442) and are pinned there
+		// (TestIssueCommentListHelpCarriesReadContract in cmd/multica).
 		"caps THREADS, not comments",
-		"no per-thread cap",
-		"fewer than N root threads",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("brief missing bounded catch-up guidance %q\n---\n%s", want, s)
@@ -5571,30 +5610,22 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 	withSection := wantSection{
 		present: []string{
 			"## Issue Metadata",
-			"high-signal scratchpad",
 			"**Read on entry.**",
 			"**Write on exit.**",
-			"**What NOT to pin.**",
-			"**Recommended keys**",
-			// Recommended-key list — both lea's killer-use-case keys
-			// (pr_number, pipeline_status) and the broader set from
-			// review must be named so the workspace converges on shared
-			// vocabulary.
-			"pr_url",
-			"pr_number",
-			"pipeline_status",
-			"deploy_url",
-			"external_issue_url",
-			"waiting_on",
-			"blocked_reason",
-			"decision",
-			// Safety boundaries — these are the negative rules that
-			// keep metadata from rotting into a second description /
-			// log dump.
-			"No secrets, tokens, or API keys",
-			"No logs",
-			"runtime bookkeeping",
-			"snake_case ASCII",
+			"Hints, not truth",
+			// MUL-5442: the brief keeps only what the interface cannot
+			// express — the read stance, the re-read bar, and the two
+			// write-time boundaries (secrets, length). The full ban list
+			// and the key-naming conventions live in the
+			// multica-working-on-issues skill, pinned by
+			// TestWorkingOnIssuesSkillCoversIssueLoopContracts so this
+			// pointer cannot dangle. The recommended-keys block was
+			// removed outright: metadata is deliberately free-form custom
+			// state (owner decision on MUL-5442), not a vocabulary the
+			// platform curates in every brief.
+			"never secrets or long content",
+			"multica issue metadata delete",
+			"the `multica-working-on-issues` skill",
 		},
 	}
 	withoutSection := wantSection{
@@ -5608,7 +5639,7 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 			"high-signal scratchpad",
 			"**Read on entry.**",
 			"**Write on exit.**",
-			"See the `## Issue Metadata` section above",
+			"the bar in `## Issue Metadata`",
 		},
 	}
 
@@ -5637,7 +5668,15 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 			filename: "CLAUDE.md",
 			workflowStepPresent: []string{
 				"multica issue metadata list issue-md-1 --output json",
-				"See the `## Issue Metadata` section above",
+				// Platform failure semantics, not tool mechanics: a failed
+				// metadata read must never block the main task (MUL-5442
+				// stage-1 review).
+				"CLI failures are normal",
+				// Both steps point at the section instead of restating its
+				// rules (MUL-5442); the entry step names what to look for,
+				// the exit step names the write bar.
+				"What to look for: `## Issue Metadata`",
+				"the bar in `## Issue Metadata`",
 				// Exit step must show both write and delete, not just
 				// "set" — stale-key cleanup is the half that keeps
 				// metadata from rotting.
@@ -5654,7 +5693,8 @@ func TestInjectRuntimeConfigIssueMetadataSectionScope(t *testing.T) {
 			filename: "CLAUDE.md",
 			workflowStepPresent: []string{
 				"multica issue metadata list issue-md-2 --output json",
-				"See the `## Issue Metadata` section above",
+				"What to look for: `## Issue Metadata`",
+				"the bar in `## Issue Metadata`",
 				"multica issue metadata set",
 				"multica issue metadata delete",
 				"Before exiting",
