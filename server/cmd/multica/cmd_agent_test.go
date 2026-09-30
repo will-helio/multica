@@ -2299,3 +2299,55 @@ func TestParseConversationStarters(t *testing.T) {
 		}
 	})
 }
+
+func TestAgentEnvGetMasksByDefaultAndRevealsOnFlag(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		json.NewEncoder(w).Encode(map[string]any{
+			"custom_env": map[string]any{"API_KEY": "s3cret-value", "OTHER": "hunter2"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	run := func(output string, reveal bool) string {
+		cmd := &cobra.Command{Use: "get"}
+		cmd.Flags().String("output", output, "")
+		cmd.Flags().Bool("reveal", false, "")
+		cmd.Flags().String("profile", "", "")
+		if reveal {
+			if err := cmd.Flags().Set("reveal", "true"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := captureStdout(t, func() error { return runAgentEnvGet(cmd, []string{"agent-1"}) })
+		if err != nil {
+			t.Fatalf("runAgentEnvGet: %v", err)
+		}
+		return out
+	}
+
+	for _, output := range []string{"json", "table"} {
+		masked := run(output, false)
+		if strings.Contains(masked, "s3cret-value") || strings.Contains(masked, "hunter2") {
+			t.Fatalf("%s output leaked a plaintext value by default: %q", output, masked)
+		}
+		if !strings.Contains(masked, "API_KEY") || !strings.Contains(masked, "OTHER") || !strings.Contains(masked, "****") {
+			t.Fatalf("%s output should list keys with ****: %q", output, masked)
+		}
+		revealed := run(output, true)
+		if !strings.Contains(revealed, "s3cret-value") || !strings.Contains(revealed, "hunter2") {
+			t.Fatalf("%s --reveal should print plaintext: %q", output, revealed)
+		}
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/agents/agent-1/env" {
+		t.Fatalf("request = %s %s, want GET /api/agents/agent-1/env", gotMethod, gotPath)
+	}
+}

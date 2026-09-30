@@ -97,7 +97,7 @@ var agentEnvCmd = &cobra.Command{
 
 var agentEnvGetCmd = &cobra.Command{
 	Use:   "get <agent-id>",
-	Short: "Print an agent's custom_env as a JSON map (agent owner or workspace owner/admin; every call is recorded)",
+	Short: "Print an agent's custom_env keys with values masked as **** (add --reveal for plaintext; agent owner or workspace owner/admin; every call is recorded)",
 	Args:  exactArgs(1),
 	RunE:  runAgentEnvGet,
 }
@@ -239,6 +239,7 @@ func init() {
 
 	// agent env get
 	agentEnvGetCmd.Flags().String("output", "json", "Output format: json or table")
+	agentEnvGetCmd.Flags().Bool("reveal", false, "Print plaintext values instead of ****. Anything printed lands in the terminal or agent transcript — only use when you must read a value. A masked get piped back into 'agent env set' preserves every value.")
 
 	// agent env set. Same three secret-safe input channels as `agent
 	// create` so scripts can keep secrets out of shell history. Mutual
@@ -1144,10 +1145,13 @@ func printAgentSkillsMutationResult(cmd *cobra.Command, agentID string, result j
 // Agent env subcommands
 // ---------------------------------------------------------------------------
 
-// runAgentEnvGet fetches the plaintext custom_env for a single agent
-// via the audited `/env` endpoint. The CLI prints raw JSON in JSON
-// mode and a key/value table otherwise; we never truncate or mask
-// values here — the security gate is on the server, not the printer.
+// runAgentEnvGet fetches the custom_env for a single agent via the audited
+// `/env` endpoint and prints it with every value masked as "****" unless
+// --reveal is passed. The mask is the same sentinel `agent env set` treats as
+// "preserve the existing entry", so a masked get -> edit -> set round-trip
+// never clobbers a secret. Masking is client-side on purpose: the web UI
+// relies on the endpoint returning plaintext, and the goal here is keeping
+// credentials out of terminals and agent transcripts by default.
 func runAgentEnvGet(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -1160,6 +1164,10 @@ func runAgentEnvGet(cmd *cobra.Command, args []string) error {
 	var resp map[string]any
 	if err := client.GetJSON(ctx, "/api/agents/"+args[0]+"/env", &resp); err != nil {
 		return fmt.Errorf("get agent env: %w", err)
+	}
+
+	if reveal, _ := cmd.Flags().GetBool("reveal"); !reveal {
+		maskAgentEnv(resp)
 	}
 
 	output, _ := cmd.Flags().GetString("output")
@@ -1175,6 +1183,15 @@ func runAgentEnvGet(cmd *cobra.Command, args []string) error {
 	}
 	cli.PrintTable(os.Stdout, headers, rows)
 	return nil
+}
+
+// maskAgentEnv replaces every custom_env value in an /env response with the
+// "****" write sentinel, in place.
+func maskAgentEnv(resp map[string]any) {
+	env, _ := resp["custom_env"].(map[string]any)
+	for k := range env {
+		env[k] = "****"
+	}
 }
 
 // runAgentEnvSet replaces an agent's custom_env wholesale via the

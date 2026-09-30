@@ -21,7 +21,7 @@ These commands read state and have no side effects:
 ```bash
 multica agent get <agent-id> --output json      # full persisted agent record
 multica agent skills list <agent-id> --output json   # current skill bindings
-multica agent env get <agent-id> --output json  # plaintext env (agent owner or ws owner/admin; agents denied)
+multica agent env get <agent-id> --output json  # key names, values masked as **** (add --reveal for plaintext; agent owner or ws owner/admin)
 ```
 
 An agent can also be **unbound**: `runtime_id` is `NULL` (served as `""` with
